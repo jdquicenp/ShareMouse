@@ -13,6 +13,12 @@ on:
 permissions:
   contents: read
 
+env:
+  APP_NAME: OneShareInput
+  VERSION: 0.1.0
+  # Si no tienes iconos válidos, pon USE_ICON: "0" para desactivar los flags --icon
+  USE_ICON: "1"
+
 jobs:
   windows-installer:
     name: Windows EXE + Installer
@@ -21,9 +27,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show tree
+      - name: Show tree & Python
         shell: pwsh
         run: |
+          $PSVersionTable
+          python -V
           Get-ChildItem -Recurse | Select-Object FullName
 
       - name: Setup Python
@@ -34,17 +42,35 @@ jobs:
       - name: Install dependencies
         shell: pwsh
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip wheel setuptools
           pip install -r requirements.txt
           pip install pyinstaller
+          pip install pillow
+          # Extras por si PyInstaller no detecta:
+          pip install pyobjc 2>$null | Out-Null  # Ignorar si falla en Windows
+          pip freeze
 
-      - name: Build EXE with PyInstaller (inline)
+      - name: Build EXE with PyInstaller (verbose)
         shell: pwsh
         run: |
-          pyinstaller --noconfirm --windowed --name OneShareInput --icon app/icon.ico app/main.py
-          if (-not (Test-Path "dist\OneShareInput\OneShareInput.exe")) { throw "PyInstaller did not produce the exe" }
+          $iconArg = ""
+          if ("${{ env.USE_ICON }}" -eq "1" -and (Test-Path "app\icon.ico")) { $iconArg = "--icon app/icon.ico" }
+          pyinstaller --clean --noconfirm --windowed `
+            --name ${{ env.APP_NAME }} `
+            $iconArg `
+            --collect-all PySide6 `
+            --collect-all screeninfo `
+            --collect-all pyautogui `
+            --collect-all pynput `
+            --hidden-import=pynput.keyboard `
+            --hidden-import=pynput.mouse `
+            --hidden-import=pyautogui `
+            --hidden-import=screeninfo `
+            --log-level DEBUG `
+            app/main.py
+          if (-not (Test-Path "dist\${{ env.APP_NAME }}\${{ env.APP_NAME }}.exe")) { throw "PyInstaller did not produce the exe" }
 
-      - name: Ensure NSIS (for installer)
+      - name: Ensure NSIS
         shell: pwsh
         run: |
           if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
@@ -57,26 +83,38 @@ jobs:
         shell: pwsh
         run: |
           & 'C:\Program Files (x86)\NSIS\makensis.exe' build\windows\installer.nsi
-          if (-not (Test-Path "OneShareInput-Setup-0.1.0.exe")) { throw "NSIS did not create installer" }
+          if (-not (Test-Path "OneShareInput-Setup-${{ env.VERSION }}.exe")) { throw "NSIS did not create installer" }
 
-      - name: Upload Windows artifacts
+      - name: List dist
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -Recurse | Select-Object FullName
+          if (Test-Path "OneShareInput-Setup-${{ env.VERSION }}.exe") { Write-Host "Installer exists." } else { Write-Host "Installer missing." }
+
+      - name: Upload Windows artifacts (even on failure)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: OneShareInput-Windows
           path: |
-            dist\OneShareInput\OneShareInput.exe
-            OneShareInput-Setup-0.1.0.exe
+            dist\${{ env.APP_NAME }}\${{ env.APP_NAME }}.exe
+            OneShareInput-Setup-${{ env.VERSION }}.exe
+            build\windows\*.nsi
+            **\*.log
 
   macos-installer:
     name: macOS .app + DMG
-    # Usa arm64 por defecto; si prefieres Intel usa: runs-on: macos-15-intel
+    # Para Intel usa: macos-15-intel
     runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show tree
+      - name: Show tree & Python
         run: |
+          sw_vers
+          python3 -V
           pwd
           ls -la
           find . -maxdepth 3 -type f | sort
@@ -88,30 +126,48 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python3 -m pip install --upgrade pip
+          python3 -m pip install --upgrade pip wheel setuptools
           pip3 install -r requirements.txt
-          # Requerido por pyautogui en macOS
-          pip3 install pyinstaller pyobjc
+          pip3 install pyinstaller pillow
+          # Requerido por pyautogui/Quartz en macOS:
+          pip3 install pyobjc
+          pip3 freeze
 
-      - name: Build .app with PyInstaller (inline)
+      - name: Build .app with PyInstaller (verbose)
         run: |
-          pyinstaller --noconfirm --windowed --name OneShareInput --icon app/icon.icns app/main.py
-          test -d "dist/OneShareInput.app" || (echo "No se generó OneShareInput.app" && exit 1)
+          ICON_ARG=""
+          if [ "${USE_ICON}" = "1" ] && [ -f "app/icon.icns" ]; then ICON_ARG="--icon app/icon.icns"; fi
+          pyinstaller --clean --noconfirm --windowed \
+            --name "${APP_NAME}" \
+            ${ICON_ARG} \
+            --collect-all PySide6 \
+            --collect-all screeninfo \
+            --collect-all pyautogui \
+            --collect-all pynput \
+            --hidden-import=pynput.keyboard \
+            --hidden-import=pynput.mouse \
+            --hidden-import=pyautogui \
+            --hidden-import=screeninfo \
+            --log-level DEBUG \
+            app/main.py
+          test -d "dist/${APP_NAME}.app" || (echo "No se generó ${APP_NAME}.app" && exit 1)
 
       - name: Create DMG
         run: |
-          APP="OneShareInput.app"
-          VOL="OneShareInput"
-          DMG="OneShareInput-0.1.0.dmg"
-          mkdir -p dmg_tmp/$VOL
-          cp -R "dist/$APP" "dmg_tmp/$VOL/"
-          hdiutil create -volname "$VOL" -srcfolder "dmg_tmp/$VOL" -ov -format UDZO "dist/$DMG"
+          APP="${APP_NAME}.app"
+          VOL="${APP_NAME}"
+          DMG="${APP_NAME}-${VERSION}.dmg"
+          mkdir -p "dmg_tmp/${VOL}"
+          cp -R "dist/${APP}" "dmg_tmp/${VOL}/"
+          hdiutil create -volname "${VOL}" -srcfolder "dmg_tmp/${VOL}" -ov -format UDZO "dist/${DMG}"
           ls -la dist
 
-      - name: Upload macOS artifacts
+      - name: Upload macOS artifacts (even on failure)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: OneShareInput-macOS
           path: |
-            dist/OneShareInput.app
-            dist/OneShareInput-0.1.0.dmg
+            dist/${{ env.APP_NAME }}.app
+            dist/${{ env.APP_NAME }}-${{ env.VERSION }}.dmg
+            **/*.log
