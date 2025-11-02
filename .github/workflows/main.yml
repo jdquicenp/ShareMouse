@@ -20,18 +20,31 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Show tree
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse | Select-Object FullName
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
       - name: Install dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
-      - name: Build EXE with PyInstaller
-        run: build\windows\build_exe.bat
-      - name: Ensure NSIS
+
+      - name: Build EXE with PyInstaller (inline)
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --windowed --name OneShareInput --icon app/icon.ico app/main.py
+          if (-not (Test-Path "dist\OneShareInput\OneShareInput.exe")) { throw "PyInstaller did not produce the exe" }
+
+      - name: Ensure NSIS (for installer)
         shell: pwsh
         run: |
           if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
@@ -39,8 +52,13 @@ jobs:
             $env:Path += ";C:\Program Files (x86)\NSIS\"
           }
           makensis -VERSION
-      - name: Make NSIS Installer
-        run: build\windows\make_installer.bat
+
+      - name: Generate NSIS installer
+        shell: pwsh
+        run: |
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' build\windows\installer.nsi
+          if (-not (Test-Path "OneShareInput-Setup-0.1.0.exe")) { throw "NSIS did not create installer" }
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -51,18 +69,45 @@ jobs:
 
   macos-installer:
     name: macOS .app + DMG
-    runs-on: macos-13
+    # Usa arm64 por defecto; si prefieres Intel usa: runs-on: macos-15-intel
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Show tree
+        run: |
+          pwd
+          ls -la
+          find . -maxdepth 3 -type f | sort
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - name: Install dependencies & Build .app
-        run: bash build/macos/build_app.sh
+
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install -r requirements.txt
+          # Requerido por pyautogui en macOS
+          pip3 install pyinstaller pyobjc
+
+      - name: Build .app with PyInstaller (inline)
+        run: |
+          pyinstaller --noconfirm --windowed --name OneShareInput --icon app/icon.icns app/main.py
+          test -d "dist/OneShareInput.app" || (echo "No se generó OneShareInput.app" && exit 1)
+
       - name: Create DMG
-        run: bash build/macos/make_dmg.sh
+        run: |
+          APP="OneShareInput.app"
+          VOL="OneShareInput"
+          DMG="OneShareInput-0.1.0.dmg"
+          mkdir -p dmg_tmp/$VOL
+          cp -R "dist/$APP" "dmg_tmp/$VOL/"
+          hdiutil create -volname "$VOL" -srcfolder "dmg_tmp/$VOL" -ov -format UDZO "dist/$DMG"
+          ls -la dist
+
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
