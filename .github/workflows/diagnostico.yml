@@ -1,0 +1,36 @@
+name: DIAG - Ver repo y entorno
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Árbol (3 niveles) y snapshot
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse -Depth 3 | Select-Object FullName | Out-File tree-windows.txt
+          Compress-Archive -Path * -DestinationPath workspace-windows.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diag-windows
+          path: |
+            tree-windows.txt
+            workspace-windows.zip
+
+  diag-macos:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Árbol (3 niveles) y snapshot
+        run: |
+          find . -maxdepth 3 -print | sed 's#^\./##' | sort > tree-macos.txt
+          zip -r workspace-macos.zip . || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diag-macos
+          path: |
+            tree-macos.txt
+            workspace-macos.zip
